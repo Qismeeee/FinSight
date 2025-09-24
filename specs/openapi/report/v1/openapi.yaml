@@ -1,0 +1,525 @@
+openapi: 3.0.3
+info:
+  title: FinSight Report Service API
+  description: Natural language to SQL analytics and report generation
+  version: 1.0.0
+  
+servers:
+  - url: https://api.finsight.dev/reports
+    description: Production server
+  - url: http://localhost:8008/reports
+    description: Development server
+
+security:
+  - BearerAuth: []
+
+paths:
+  /nl2sql:
+    post:
+      summary: Convert natural language query to SQL with preview
+      tags: [Natural Language Analytics]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NL2SQLRequest'
+      responses:
+        '200':
+          description: Query converted successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NL2SQLResponse'
+        '400':
+          description: Query cannot be safely converted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Query limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /execute:
+    post:
+      summary: Execute confirmed SQL query and generate report
+      tags: [Report Generation]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExecuteQueryRequest'
+      responses:
+        '200':
+          description: Report generated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReportResponse'
+        '400':
+          description: Invalid query execution request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /reports:
+    get:
+      summary: Get user's generated reports
+      tags: [Report Management]
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+            maximum: 50
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+        - name: report_type
+          in: query
+          schema:
+            type: string
+            enum: [spending_analysis, goal_progress, budget_summary, investment_review]
+        - name: date_from
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: date_to
+          in: query
+          schema:
+            type: string
+            format: date
+      responses:
+        '200':
+          description: Reports retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  reports:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ReportSummary'
+                  total:
+                    type: integer
+                  has_more:
+                    type: boolean
+
+  /reports/{report_id}:
+    get:
+      summary: Get specific report details
+      tags: [Report Management]
+      parameters:
+        - name: report_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Report retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReportDetail'
+        '404':
+          description: Report not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    delete:
+      summary: Delete report
+      tags: [Report Management]
+      parameters:
+        - name: report_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '204':
+          description: Report deleted successfully
+        '404':
+          description: Report not found
+
+  /reports/{report_id}/export:
+    get:
+      summary: Export report in various formats
+      tags: [Report Export]
+      parameters:
+        - name: report_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: format
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [pdf, csv, json, xlsx]
+      responses:
+        '200':
+          description: Report exported successfully
+          content:
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+            text/csv:
+              schema:
+                type: string
+            application/json:
+              schema:
+                type: object
+            application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
+              schema:
+                type: string
+                format: binary
+
+  /templates:
+    get:
+      summary: Get available report templates
+      tags: [Templates]
+      responses:
+        '200':
+          description: Templates retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ReportTemplate'
+
+  /templates/{template_id}/generate:
+    post:
+      summary: Generate report from template
+      tags: [Templates]
+      parameters:
+        - name: template_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TemplateParameters'
+      responses:
+        '200':
+          description: Report generated from template
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReportResponse'
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    NL2SQLRequest:
+      type: object
+      required:
+        - query
+      properties:
+        query:
+          type: string
+          minLength: 5
+          maxLength: 500
+          example: "Show me my spending by category for the last 3 months"
+        time_range:
+          type: object
+          properties:
+            start_date:
+              type: string
+              format: date
+            end_date:
+              type: string
+              format: date
+        context:
+          type: object
+          description: Additional context for query interpretation
+          properties:
+            preferred_currency:
+              type: string
+              default: "USD"
+            grouping_preference:
+              type: string
+              enum: [daily, weekly, monthly, yearly]
+
+    NL2SQLResponse:
+      type: object
+      properties:
+        interpreted_query:
+          type: string
+          description: How the system interpreted the natural language query
+        sql_query:
+          type: string
+          description: Generated SQL query (sanitized for security)
+        preview_data:
+          type: array
+          items:
+            type: object
+          description: First 5 rows of query results for user confirmation
+        estimated_rows:
+          type: integer
+          description: Estimated number of result rows
+        chart_recommendation:
+          $ref: '#/components/schemas/ChartSpecification'
+        security_analysis:
+          type: object
+          properties:
+            is_safe:
+              type: boolean
+            constraints_applied:
+              type: array
+              items:
+                type: string
+            warnings:
+              type: array
+              items:
+                type: string
+        execution_token:
+          type: string
+          description: Token required to execute this query
+
+    ExecuteQueryRequest:
+      type: object
+      required:
+        - execution_token
+        - confirmed
+      properties:
+        execution_token:
+          type: string
+          description: Token from NL2SQL response
+        confirmed:
+          type: boolean
+          description: User confirmation to execute the query
+        report_title:
+          type: string
+          maxLength: 200
+          description: Optional custom title for the generated report
+        include_chart:
+          type: boolean
+          default: true
+        chart_customization:
+          $ref: '#/components/schemas/ChartCustomization'
+
+    ReportResponse:
+      type: object
+      properties:
+        report_id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        data:
+          type: array
+          items:
+            type: object
+          description: Query results
+        summary:
+          type: object
+          properties:
+            total_rows:
+              type: integer
+            key_insights:
+              type: array
+              items:
+                type: string
+            data_timeframe:
+              type: object
+              properties:
+                start_date:
+                  type: string
+                  format: date
+                end_date:
+                  type: string
+                  format: date
+        chart:
+          $ref: '#/components/schemas/ChartSpecification'
+        generated_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+
+    ReportSummary:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        report_type:
+          type: string
+          enum: [spending_analysis, goal_progress, budget_summary, investment_review, custom]
+        generated_at:
+          type: string
+          format: date-time
+        data_timeframe:
+          type: object
+          properties:
+            start_date:
+              type: string
+              format: date
+            end_date:
+              type: string
+              format: date
+        row_count:
+          type: integer
+
+    ReportDetail:
+      allOf:
+        - $ref: '#/components/schemas/ReportSummary'
+        - type: object
+          properties:
+            data:
+              type: array
+              items:
+                type: object
+            summary:
+              type: object
+            chart:
+              $ref: '#/components/schemas/ChartSpecification'
+            sql_query:
+              type: string
+              description: The SQL query that generated this report (for reference)
+
+    ChartSpecification:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [bar, line, pie, scatter, area, histogram]
+        title:
+          type: string
+        x_axis:
+          type: object
+          properties:
+            field:
+              type: string
+            label:
+              type: string
+            type:
+              type: string
+              enum: [categorical, numerical, temporal]
+        y_axis:
+          type: object
+          properties:
+            field:
+              type: string
+            label:
+              type: string
+            type:
+              type: string
+              enum: [numerical]
+        series:
+          type: array
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+              label:
+                type: string
+              color:
+                type: string
+        aggregation:
+          type: string
+          enum: [sum, avg, count, max, min]
+
+    ChartCustomization:
+      type: object
+      properties:
+        chart_type:
+          type: string
+          enum: [bar, line, pie, scatter, area, histogram]
+        title:
+          type: string
+        color_scheme:
+          type: string
+          enum: [default, colorblind_friendly, monochrome, custom]
+        custom_colors:
+          type: array
+          items:
+            type: string
+            pattern: "^#[A-Fa-f0-9]{6}$"
+
+    ReportTemplate:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+        category:
+          type: string
+          enum: [spending, budgeting, goals, investments, overview]
+        parameters:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+              type:
+                type: string
+                enum: [date_range, category, account, amount_range]
+              required:
+                type: boolean
+              default_value:
+                type: string
+
+    TemplateParameters:
+      type: object
+      additionalProperties: true
+      description: Dynamic parameters based on template requirements
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+        message:
+          type: string
+        details:
+          type: object
+        query_issues:
+          type: array
+          items:
+            type: object
+            properties:
+              type:
+                type: string
+                enum: [security_risk, unsupported_operation, data_access_violation]
+              description:
+                type: string
